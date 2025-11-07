@@ -2,3 +2,11 @@
 !private/
 !public/
 !.gitignore
+storage/app/firebase/
+firebase-credentials.json
+*.json
+
+# Environment
+.env
+.env.backup
+.env.production
