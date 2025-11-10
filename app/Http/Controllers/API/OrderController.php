@@ -1,6 +1,6 @@
 <?php
 
-// app/Http/Controllers/Api/OrderController.php
+// app/Http/Controllers/Api/OrderController.php - UPDATED
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -11,24 +11,26 @@ use App\Models\Product;
 use App\Models\UserAddress;
 use App\Models\Voucher;
 use App\Models\DeliveryTracking;
+use App\Models\MerchantPayment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use App\Services\FirebaseService;
 use App\Services\NotificationService;
+
 class OrderController extends Controller
 {
-     protected $notificationService;
+    protected $notificationService;
 
     public function __construct(NotificationService $notificationService)
     {
         $this->notificationService = $notificationService;
     }
+
     /**
      * Get user orders
      */
     public function index(Request $request)
     {
-        $query = Order::with(['items.product', 'address'])
+        $query = Order::with(['items.product.merchant', 'address'])
             ->where('user_id', $request->user()->id);
 
         // Filter by status
@@ -50,7 +52,7 @@ class OrderController extends Controller
     public function show(Request $request, $id)
     {
         $order = Order::with([
-            'items.product',
+            'items.product.merchant',
             'address',
             'payment',
             'tracking.histories'
@@ -77,7 +79,7 @@ class OrderController extends Controller
         ]);
 
         // Get user cart
-        $cartItems = Cart::with('product')
+        $cartItems = Cart::with('product.merchant')
             ->where('user_id', $request->user()->id)
             ->get();
 
@@ -119,8 +121,8 @@ class OrderController extends Controller
                 $voucher->increment('used_count');
             }
 
-            // Calculate shipping cost (example: flat rate)
-            $shippingCost = 10000; // Rp 10.000
+            // Calculate shipping cost
+            $shippingCost = 10000;
 
             $totalPrice = $subtotal + $shippingCost - $discount;
 
@@ -138,7 +140,9 @@ class OrderController extends Controller
                 'payment_status' => 'unpaid'
             ]);
 
-            // Create order items and reduce stock
+            // Create order items, reduce stock, and create merchant payments
+            $merchantPayments = [];
+            
             foreach ($cartItems as $item) {
                 OrderItem::create([
                     'order_id' => $order->id,
@@ -151,6 +155,40 @@ class OrderController extends Controller
 
                 // Reduce product stock
                 $item->product->decrement('stock', $item->quantity);
+
+                // Calculate merchant payment
+                if ($item->product->merchant_id) {
+                    $itemAmount = $item->product->price * $item->quantity;
+                    $merchant = $item->product->merchant;
+                    
+                    if (!isset($merchantPayments[$merchant->id])) {
+                        $merchantPayments[$merchant->id] = [
+                            'merchant' => $merchant,
+                            'order_amount' => 0
+                        ];
+                    }
+                    
+                    $merchantPayments[$merchant->id]['order_amount'] += $itemAmount;
+                }
+            }
+
+            // Create merchant payment records
+            foreach ($merchantPayments as $merchantId => $data) {
+                $merchant = $data['merchant'];
+                $orderAmount = $data['order_amount'];
+                
+                // Calculate commission
+                $commissionAmount = $orderAmount * ($merchant->commission_rate / 100);
+                $merchantAmount = $orderAmount - $commissionAmount;
+
+                MerchantPayment::create([
+                    'merchant_id' => $merchantId,
+                    'order_id' => $order->id,
+                    'order_amount' => $orderAmount,
+                    'commission_amount' => $commissionAmount,
+                    'merchant_amount' => $merchantAmount,
+                    'status' => 'pending'
+                ]);
             }
 
             // Clear cart
@@ -165,7 +203,7 @@ class OrderController extends Controller
             DB::commit();
 
             // Load relationships
-            $order->load(['items.product', 'address']);
+            $order->load(['items.product.merchant', 'address']);
 
             return response()->json([
                 'success' => true,
@@ -210,6 +248,10 @@ class OrderController extends Controller
                 $item->product->increment('stock', $item->quantity);
             }
 
+            // Cancel merchant payments
+            MerchantPayment::where('order_id', $order->id)
+                ->update(['status' => 'failed']);
+
             $order->update([
                 'status' => 'cancelled',
                 'cancelled_at' => now(),
@@ -233,9 +275,22 @@ class OrderController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Update order status (when payment is completed)
+     */
     public function updateStatus(Request $request, Order $order)
     {
         $order->update(['status' => $request->status]);
+
+        // Update merchant payment status when order is paid
+        if ($request->status === 'paid') {
+            MerchantPayment::where('order_id', $order->id)
+                ->update([
+                    'status' => 'paid',
+                    'paid_at' => now()
+                ]);
+        }
 
         // Send notification based on status
         $title = $this->getNotificationTitle($request->status);

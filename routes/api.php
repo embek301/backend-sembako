@@ -1,6 +1,6 @@
 <?php
 
-// routes/api.php
+// routes/api.php - UPDATED
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CategoryController;
@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\WishlistController;
 use App\Http\Controllers\Api\AddressController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\VoucherController;
+use App\Http\Controllers\Api\MerchantController;
 
 /*
 |--------------------------------------------------------------------------
@@ -30,6 +31,9 @@ Route::get('/', function () {
 // Public routes
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
+
+// Merchant registration
+Route::post('/merchant/register', [MerchantController::class, 'register']);
 
 // Categories
 Route::get('/categories', [CategoryController::class, 'index']);
@@ -50,7 +54,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Auth
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/profile', [AuthController::class, 'profile']);
-    Route::post('/profile', [AuthController::class, 'updateProfile']); // CHANGED: PUT to POST for FormData support
+    Route::post('/profile', [AuthController::class, 'updateProfile']);
     Route::post('/change-password', [AuthController::class, 'changePassword']);
     
     // Address Management
@@ -105,8 +109,33 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/tracking/{orderId}/update-location', [TrackingController::class, 'updateLocation']);
     });
     
+    // Merchant routes
+    Route::prefix('merchant')->middleware('role:merchant')->group(function () {
+        // Profile
+        Route::get('/profile', [MerchantController::class, 'profile']);
+        Route::post('/profile', [MerchantController::class, 'updateProfile']);
+        
+        // Products Management
+        Route::get('/products', [MerchantController::class, 'products']);
+        Route::post('/products', [MerchantController::class, 'storeProduct']);
+        Route::put('/products/{id}', [MerchantController::class, 'updateProduct']);
+        Route::delete('/products/{id}', [MerchantController::class, 'deleteProduct']);
+        
+        // Financial
+        Route::get('/payments', [MerchantController::class, 'payments']);
+        Route::get('/balance', [MerchantController::class, 'balance']);
+        Route::get('/withdrawals', [MerchantController::class, 'withdrawals']);
+        Route::post('/withdrawals', [MerchantController::class, 'requestWithdrawal']);
+    });
+    
     // Admin routes
     Route::middleware('role:admin')->group(function () {
         Route::post('/tracking/{orderId}/assign-driver', [TrackingController::class, 'assignDriver']);
+        
+        // Merchant management
+        Route::get('/admin/merchants', [MerchantController::class, 'index']);
+        Route::post('/admin/merchants/{id}/verify', [MerchantController::class, 'verify']);
+        Route::get('/admin/withdrawals', [MerchantController::class, 'allWithdrawals']);
+        Route::post('/admin/withdrawals/{id}/process', [MerchantController::class, 'processWithdrawal']);
     });
 });

@@ -6,8 +6,17 @@ use Illuminate\Database\Eloquent\Model;
 class Product extends Model
 {
     protected $fillable = [
-        'category_id', 'name', 'description', 'price', 
-        'stock', 'unit', 'sku', 'images', 'is_active', 'min_order'
+        'merchant_id', // NEW
+        'category_id',
+        'name',
+        'description',
+        'price',
+        'stock',
+        'unit',
+        'sku',
+        'images',
+        'is_active',
+        'min_order'
     ];
 
     protected $casts = [
@@ -23,6 +32,11 @@ class Product extends Model
         return $this->belongsTo(Category::class);
     }
 
+    public function merchant()
+    {
+        return $this->belongsTo(User::class, 'merchant_id');
+    }
+
     public function reviews()
     {
         return $this->hasMany(Review::class);
@@ -30,14 +44,23 @@ class Product extends Model
 
     public function getAverageRatingAttribute()
     {
-        return $this->reviews()->avg('rating') ?? 0;
+        try {
+            return $this->reviews()->avg('rating') ?? 0;
+        } catch (\Exception $e) {
+            \Log::error('Error calculating average rating: ' . $e->getMessage());
+            return 0;
+        }
     }
 
     public function getTotalReviewsAttribute()
     {
-        return $this->reviews()->count();
+        try {
+            return $this->reviews()->count();
+        } catch (\Exception $e) {
+            \Log::error('Error counting reviews: ' . $e->getMessage());
+            return 0;
+        }
     }
-
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
@@ -46,5 +69,17 @@ class Product extends Model
     public function scopeInStock($query)
     {
         return $query->where('stock', '>', 0);
+    }
+
+    public function scopeByMerchant($query, $merchantId)
+    {
+        return $query->where('merchant_id', $merchantId);
+    }
+
+    public function scopeVerifiedMerchants($query)
+    {
+        return $query->whereHas('merchant', function ($q) {
+            $q->where('is_verified', true);
+        });
     }
 }

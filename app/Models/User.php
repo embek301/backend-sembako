@@ -1,6 +1,4 @@
 <?php
-
-// app/Models/User.php - UPDATE MODEL
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -21,19 +19,34 @@ class User extends Authenticatable
         'role', 
         'status', 
         'password', 
-        'fcm_token'
+        'fcm_token',
+        // Merchant fields
+        'store_name',
+        'store_description',
+        'store_logo',
+        'bank_name',
+        'bank_account_number',
+        'bank_account_name',
+        'commission_rate',
+        'is_verified',
+        'verified_at'
     ];
 
     protected $hidden = [
         'password', 
-        'remember_token'
+        'remember_token',
+        'bank_account_number' // Hide sensitive data
     ];
 
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
+        'commission_rate' => 'decimal:2',
+        'is_verified' => 'boolean',
+        'verified_at' => 'datetime'
     ];
 
+    // Existing relationships
     public function addresses()
     {
         return $this->hasMany(UserAddress::class);
@@ -58,4 +71,31 @@ class User extends Authenticatable
     {
         return $this->hasMany(Review::class);
     }
+
+    public function isMerchant()
+    {
+        return $this->role === 'merchant';
+    }
+
+    public function isVerifiedMerchant()
+    {
+        return $this->role === 'merchant' && $this->is_verified && $this->status === 'active';
+    }
+
+    // ✅ Relationships
+    public function products()
+    {
+        return $this->hasMany(Product::class, 'merchant_id');
+    }
+
+    public function merchantPayments()
+    {
+        return $this->hasMany(MerchantPayment::class, 'merchant_id');
+    }
+
+    public function withdrawals()
+    {
+        return $this->hasMany(MerchantWithdrawal::class, 'merchant_id');
+    }
+
 }
