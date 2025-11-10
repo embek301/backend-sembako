@@ -110,23 +110,29 @@ Route::middleware('auth:sanctum')->group(function () {
     });
     
     // Merchant routes
-    Route::prefix('merchant')->middleware('role:merchant')->group(function () {
+    Route::prefix('merchant')->group(function () {
+    // Public - Registration
+    Route::post('/register', [MerchantController::class, 'register']);
+    
+    // Protected - Require auth
+    Route::middleware('auth:sanctum')->group(function () {
         // Profile
         Route::get('/profile', [MerchantController::class, 'profile']);
         Route::post('/profile', [MerchantController::class, 'updateProfile']);
         
-        // Products Management
-        Route::get('/products', [MerchantController::class, 'products']);
-        Route::post('/products', [MerchantController::class, 'storeProduct']);
+        // Products
+        Route::get('/products', [MerchantController::class, 'getProducts']);
+        Route::post('/products', [MerchantController::class, 'createProduct']);
         Route::put('/products/{id}', [MerchantController::class, 'updateProduct']);
         Route::delete('/products/{id}', [MerchantController::class, 'deleteProduct']);
         
         // Financial
-        Route::get('/payments', [MerchantController::class, 'payments']);
-        Route::get('/balance', [MerchantController::class, 'balance']);
-        Route::get('/withdrawals', [MerchantController::class, 'withdrawals']);
+        Route::get('/balance', [MerchantController::class, 'getBalance']);
+        Route::get('/payments', [MerchantController::class, 'getPayments']);
+        Route::get('/withdrawals', [MerchantController::class, 'getWithdrawals']);
         Route::post('/withdrawals', [MerchantController::class, 'requestWithdrawal']);
     });
+});
     
     // Admin routes
     Route::middleware('role:admin')->group(function () {

@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -29,24 +30,23 @@ class User extends Authenticatable
         'bank_account_name',
         'commission_rate',
         'is_verified',
-        'verified_at'
+        'verified_at',
     ];
 
     protected $hidden = [
         'password', 
-        'remember_token',
-        'bank_account_number' // Hide sensitive data
+        'remember_token'
     ];
 
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
-        'commission_rate' => 'decimal:2',
         'is_verified' => 'boolean',
-        'verified_at' => 'datetime'
+        'verified_at' => 'datetime',
+        'commission_rate' => 'decimal:2',
     ];
 
-    // Existing relationships
+    // User relationships
     public function addresses()
     {
         return $this->hasMany(UserAddress::class);
@@ -72,17 +72,7 @@ class User extends Authenticatable
         return $this->hasMany(Review::class);
     }
 
-    public function isMerchant()
-    {
-        return $this->role === 'merchant';
-    }
-
-    public function isVerifiedMerchant()
-    {
-        return $this->role === 'merchant' && $this->is_verified && $this->status === 'active';
-    }
-
-    // ✅ Relationships
+    // Merchant relationships
     public function products()
     {
         return $this->hasMany(Product::class, 'merchant_id');
@@ -98,4 +88,24 @@ class User extends Authenticatable
         return $this->hasMany(MerchantWithdrawal::class, 'merchant_id');
     }
 
+    // Helper methods
+    public function isMerchant()
+    {
+        return $this->role === 'merchant';
+    }
+
+    public function isVerifiedMerchant()
+    {
+        return $this->role === 'merchant' && $this->is_verified == 1;
+    }
+
+    public function isAdmin()
+    {
+        return $this->role === 'admin';
+    }
+
+    public function isDriver()
+    {
+        return $this->role === 'driver';
+    }
 }
