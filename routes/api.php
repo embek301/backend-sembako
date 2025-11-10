@@ -1,6 +1,6 @@
 <?php
 
-// routes/api.php - UPDATED
+// routes/api.php - FIXED
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CategoryController;
@@ -15,11 +15,6 @@ use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\VoucherController;
 use App\Http\Controllers\Api\MerchantController;
 
-/*
-|--------------------------------------------------------------------------
-| API Routes
-|--------------------------------------------------------------------------
-*/
 Route::get('/', function () {
     return response()->json([
         'success' => true,
@@ -31,9 +26,6 @@ Route::get('/', function () {
 // Public routes
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
-
-// Merchant registration
-Route::post('/merchant/register', [MerchantController::class, 'register']);
 
 // Categories
 Route::get('/categories', [CategoryController::class, 'index']);
@@ -109,39 +101,37 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/tracking/{orderId}/update-location', [TrackingController::class, 'updateLocation']);
     });
     
-    // Merchant routes
+    // ✅ MERCHANT ROUTES - FIXED
     Route::prefix('merchant')->group(function () {
-    // Public - Registration
-    Route::post('/register', [MerchantController::class, 'register']);
-    
-    // Protected - Require auth
-    Route::middleware('auth:sanctum')->group(function () {
-        // Profile
+        // Public - Registration (outside auth middleware)
+        Route::post('/register', [MerchantController::class, 'register'])
+            ->withoutMiddleware('auth:sanctum');
+        
+        // Protected routes
         Route::get('/profile', [MerchantController::class, 'profile']);
         Route::post('/profile', [MerchantController::class, 'updateProfile']);
         
-        // Products
-        Route::get('/products', [MerchantController::class, 'getProducts']);
-        Route::post('/products', [MerchantController::class, 'createProduct']);
+        // ✅ Products - Fixed method names
+        Route::get('/products', [MerchantController::class, 'products']); // ← Changed
+        Route::post('/products', [MerchantController::class, 'storeProduct']); // ← Changed
         Route::put('/products/{id}', [MerchantController::class, 'updateProduct']);
         Route::delete('/products/{id}', [MerchantController::class, 'deleteProduct']);
         
-        // Financial
-        Route::get('/balance', [MerchantController::class, 'getBalance']);
-        Route::get('/payments', [MerchantController::class, 'getPayments']);
-        Route::get('/withdrawals', [MerchantController::class, 'getWithdrawals']);
+        // ✅ Financial - Fixed method names
+        Route::get('/balance', [MerchantController::class, 'balance']); // ← Changed
+        Route::get('/payments', [MerchantController::class, 'payments']); // ← Changed
+        Route::get('/withdrawals', [MerchantController::class, 'withdrawals']); // ← Changed
         Route::post('/withdrawals', [MerchantController::class, 'requestWithdrawal']);
     });
-});
     
     // Admin routes
-    Route::middleware('role:admin')->group(function () {
+    Route::middleware('role:admin')->prefix('admin')->group(function () {
         Route::post('/tracking/{orderId}/assign-driver', [TrackingController::class, 'assignDriver']);
         
         // Merchant management
-        Route::get('/admin/merchants', [MerchantController::class, 'index']);
-        Route::post('/admin/merchants/{id}/verify', [MerchantController::class, 'verify']);
-        Route::get('/admin/withdrawals', [MerchantController::class, 'allWithdrawals']);
-        Route::post('/admin/withdrawals/{id}/process', [MerchantController::class, 'processWithdrawal']);
+        Route::get('/merchants', [MerchantController::class, 'index']);
+        Route::post('/merchants/{id}/verify', [MerchantController::class, 'verify']);
+        Route::get('/withdrawals', [MerchantController::class, 'allWithdrawals']);
+        Route::post('/withdrawals/{id}/process', [MerchantController::class, 'processWithdrawal']);
     });
 });

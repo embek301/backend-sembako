@@ -64,80 +64,80 @@ class MerchantController extends Controller
     /**
      * Get merchant profile
      */
-   public function profile(Request $request)
-{
-    try {
-        $merchant = $request->user();
-        
-        if (!$merchant || !$merchant->isMerchant()) {
+    public function profile(Request $request)
+    {
+        try {
+            $merchant = $request->user();
+
+            if (!$merchant || !$merchant->isMerchant()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized'
+                ], 403);
+            }
+
+            // Calculate stats safely
+            $stats = [
+                'total_products' => $merchant->products()->count(),
+                'active_products' => $merchant->products()->where('is_active', 1)->count(), // ← Ubah true jadi 1
+                'total_sales' => $merchant->merchantPayments()
+                    ->where('status', 'paid')
+                    ->sum('order_amount') ?? 0,
+                'total_earnings' => $merchant->merchantPayments()
+                    ->where('status', 'paid')
+                    ->sum('merchant_amount') ?? 0,
+                'pending_balance' => $merchant->merchantPayments()
+                    ->where('status', 'pending')
+                    ->sum('merchant_amount') ?? 0,
+            ];
+
+            // Calculate available balance
+            $totalEarnings = $stats['total_earnings'];
+            $withdrawnAmount = $merchant->withdrawals()
+                ->where('status', 'completed')
+                ->sum('amount') ?? 0;
+            $pendingWithdrawal = $merchant->withdrawals()
+                ->whereIn('status', ['pending', 'processing'])
+                ->sum('amount') ?? 0;
+
+            $stats['available_balance'] = $totalEarnings - $withdrawnAmount - $pendingWithdrawal;
+
+            // ✅ PENTING: Jangan load products dengan appended attributes
+            // Load merchant without causing issues
+            $merchantData = [
+                'id' => $merchant->id,
+                'name' => $merchant->name,
+                'email' => $merchant->email,
+                'phone' => $merchant->phone,
+                'store_name' => $merchant->store_name,
+                'store_description' => $merchant->store_description,
+                'store_logo' => $merchant->store_logo,
+                'is_verified' => $merchant->is_verified,
+                'verified_at' => $merchant->verified_at,
+                'commission_rate' => $merchant->commission_rate,
+                'status' => $merchant->status,
+            ];
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'merchant' => $merchantData,
+                    'stats' => $stats
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Merchant profile error', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
             return response()->json([
                 'success' => false,
-                'message' => 'Unauthorized'
-            ], 403);
+                'message' => 'Server error: ' . $e->getMessage()
+            ], 500);
         }
-
-        // Calculate stats safely
-        $stats = [
-            'total_products' => $merchant->products()->count(),
-            'active_products' => $merchant->products()->where('is_active', 1)->count(), // ← Ubah true jadi 1
-            'total_sales' => $merchant->merchantPayments()
-                ->where('status', 'paid')
-                ->sum('order_amount') ?? 0,
-            'total_earnings' => $merchant->merchantPayments()
-                ->where('status', 'paid')
-                ->sum('merchant_amount') ?? 0,
-            'pending_balance' => $merchant->merchantPayments()
-                ->where('status', 'pending')
-                ->sum('merchant_amount') ?? 0,
-        ];
-
-        // Calculate available balance
-        $totalEarnings = $stats['total_earnings'];
-        $withdrawnAmount = $merchant->withdrawals()
-            ->where('status', 'completed')
-            ->sum('amount') ?? 0;
-        $pendingWithdrawal = $merchant->withdrawals()
-            ->whereIn('status', ['pending', 'processing'])
-            ->sum('amount') ?? 0;
-
-        $stats['available_balance'] = $totalEarnings - $withdrawnAmount - $pendingWithdrawal;
-
-        // ✅ PENTING: Jangan load products dengan appended attributes
-        // Load merchant without causing issues
-        $merchantData = [
-            'id' => $merchant->id,
-            'name' => $merchant->name,
-            'email' => $merchant->email,
-            'phone' => $merchant->phone,
-            'store_name' => $merchant->store_name,
-            'store_description' => $merchant->store_description,
-            'store_logo' => $merchant->store_logo,
-            'is_verified' => $merchant->is_verified,
-            'verified_at' => $merchant->verified_at,
-            'commission_rate' => $merchant->commission_rate,
-            'status' => $merchant->status,
-        ];
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'merchant' => $merchantData,
-                'stats' => $stats
-            ]
-        ]);
-
-    } catch (\Exception $e) {
-        \Log::error('Merchant profile error', [
-            'message' => $e->getMessage(),
-            'trace' => $e->getTraceAsString()
-        ]);
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Server error: ' . $e->getMessage()
-        ], 500);
     }
-}
 
     /**
      * Update merchant profile
@@ -173,8 +173,13 @@ class MerchantController extends Controller
         }
 
         $data = $request->only([
-            'name', 'phone', 'store_name', 'store_description',
-            'bank_name', 'bank_account_number', 'bank_account_name'
+            'name',
+            'phone',
+            'store_name',
+            'store_description',
+            'bank_name',
+            'bank_account_number',
+            'bank_account_name'
         ]);
 
         // Handle logo upload
@@ -238,13 +243,14 @@ class MerchantController extends Controller
     {
         $merchant = $request->user();
 
-        if (!$merchant->isVerifiedMerchant()) {
+        if (!$merchant->isMerchant()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Your merchant account is not verified yet'
+                'message' => 'Unauthorized'
             ], 403);
         }
 
+        // ✅ Ubah validasi - SKU jadi nullable
         $validator = Validator::make($request->all(), [
             'category_id' => 'required|exists:categories,id',
             'name' => 'required|string|max:255',
@@ -252,7 +258,7 @@ class MerchantController extends Controller
             'price' => 'required|numeric|min:0',
             'stock' => 'required|integer|min:0',
             'unit' => 'required|string',
-            'sku' => 'required|string|unique:products',
+            'sku' => 'nullable|string|unique:products,sku', // ← Changed to nullable
             'min_order' => 'required|integer|min:1',
             'images' => 'nullable|array',
             'images.*' => 'image|mimes:jpeg,png,jpg|max:2048'
@@ -268,7 +274,18 @@ class MerchantController extends Controller
 
         $data = $validator->validated();
         $data['merchant_id'] = $merchant->id;
-        $data['is_active'] = true;
+        $data['is_active'] = $request->has('is_active') ? (bool) $request->is_active : true;
+
+        // ✅ Auto-generate SKU jika tidak ada
+        if (empty($data['sku'])) {
+            // Generate SKU: MER{merchant_id}-{timestamp}
+            $data['sku'] = 'MER' . $merchant->id . '-' . strtoupper(substr(uniqid(), -6));
+
+            // Pastikan unique
+            while (Product::where('sku', $data['sku'])->exists()) {
+                $data['sku'] = 'MER' . $merchant->id . '-' . strtoupper(substr(uniqid(), -6));
+            }
+        }
 
         // Handle image uploads
         $imagesPaths = [];
