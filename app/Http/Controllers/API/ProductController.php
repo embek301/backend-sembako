@@ -13,8 +13,8 @@ class ProductController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Product::with(['category', 'reviews.user'])
-            ->active();
+         $query = Product::with(['category', 'merchant', 'reviews.user']) // ✅ Add merchant
+        ->active();
 
         // Filter by category
         if ($request->has('category_id')) {
@@ -90,20 +90,20 @@ class ProductController extends Controller
      * Get featured products
      */
     public function featured()
-    {
-        $products = Product::with('category')
-            ->active()
-            ->inStock()
-            ->withAvg('reviews', 'rating')
-            ->orderBy('reviews_avg_rating', 'desc')
-            ->limit(10)
-            ->get();
+{
+    $products = Product::with(['category', 'merchant']) // ✅ Add merchant
+        ->active()
+        ->inStock()
+        ->withAvg('reviews', 'rating')
+        ->orderBy('reviews_avg_rating', 'desc')
+        ->limit(10)
+        ->get();
 
-        return response()->json([
-            'success' => true,
-            'data' => $products
-        ]);
-    }
+    return response()->json([
+        'success' => true,
+        'data' => $products
+    ]);
+}
 
     /**
      * Get related products

@@ -117,6 +117,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/products/{id}', [MerchantController::class, 'updateProduct']);
         Route::delete('/products/{id}', [MerchantController::class, 'deleteProduct']);
         
+        // ✅ Order Management
+        Route::get('/orders', [OrderController::class, 'merchantOrders']);
+        Route::post('/orders/{id}/approve', [OrderController::class, 'merchantApprove']);
+        Route::post('/orders/{id}/reject', [OrderController::class, 'merchantReject']);
+
         // ✅ Financial - Fixed method names
         Route::get('/balance', [MerchantController::class, 'balance']); // ← Changed
         Route::get('/payments', [MerchantController::class, 'payments']); // ← Changed
