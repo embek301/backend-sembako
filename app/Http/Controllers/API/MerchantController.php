@@ -1,6 +1,6 @@
 <?php
 
-// app/Http/Controllers/Api/MerchantController.php
+// app/Http/Controllers/Api/MerchantController.php - FIXED
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -12,6 +12,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
+
 class MerchantController extends Controller
 {
     /**
@@ -51,7 +53,7 @@ class MerchantController extends Controller
             'bank_account_number' => $request->bank_account_number,
             'bank_account_name' => $request->bank_account_name,
             'is_verified' => false,
-            'status' => 'inactive' // Wait for admin verification
+            'status' => 'inactive'
         ]);
 
         return response()->json([
@@ -62,7 +64,7 @@ class MerchantController extends Controller
     }
 
     /**
-     * Get merchant profile
+     * ✅ Get merchant profile with ACCURATE stats
      */
     public function profile(Request $request)
     {
@@ -76,34 +78,61 @@ class MerchantController extends Controller
                 ], 403);
             }
 
-            // Calculate stats safely
-            $stats = [
-                'total_products' => $merchant->products()->count(),
-                'active_products' => $merchant->products()->where('is_active', 1)->count(), // ← Ubah true jadi 1
-                'total_sales' => $merchant->merchantPayments()
-                    ->where('status', 'paid')
-                    ->sum('order_amount') ?? 0,
-                'total_earnings' => $merchant->merchantPayments()
-                    ->where('status', 'paid')
-                    ->sum('merchant_amount') ?? 0,
-                'pending_balance' => $merchant->merchantPayments()
-                    ->where('status', 'pending')
-                    ->sum('merchant_amount') ?? 0,
-            ];
+            // ✅ ACCURATE FINANCIAL CALCULATIONS
+            
+            // Total sales from PAID and APPROVED orders only
+            $totalSales = MerchantPayment::where('merchant_id', $merchant->id)
+                ->where('status', 'paid')
+                ->whereHas('order', function($q) {
+                    $q->where('merchant_status', 'approved');
+                })
+                ->sum('order_amount') ?? 0;
 
-            // Calculate available balance
-            $totalEarnings = $stats['total_earnings'];
-            $withdrawnAmount = $merchant->withdrawals()
+            // Total earnings (after commission) from PAID and APPROVED orders
+            $totalEarnings = MerchantPayment::where('merchant_id', $merchant->id)
+                ->where('status', 'paid')
+                ->whereHas('order', function($q) {
+                    $q->where('merchant_status', 'approved');
+                })
+                ->sum('merchant_amount') ?? 0;
+
+            // Pending balance from APPROVED but not yet PAID orders
+            $pendingBalance = MerchantPayment::where('merchant_id', $merchant->id)
+                ->where('status', 'pending')
+                ->whereHas('order', function($q) {
+                    $q->where('merchant_status', 'approved')
+                      ->where('payment_status', 'paid');
+                })
+                ->sum('merchant_amount') ?? 0;
+
+            // Already withdrawn amount
+            $withdrawnAmount = MerchantWithdrawal::where('merchant_id', $merchant->id)
                 ->where('status', 'completed')
                 ->sum('amount') ?? 0;
-            $pendingWithdrawal = $merchant->withdrawals()
+
+            // Pending withdrawal (being processed)
+            $pendingWithdrawal = MerchantWithdrawal::where('merchant_id', $merchant->id)
                 ->whereIn('status', ['pending', 'processing'])
                 ->sum('amount') ?? 0;
 
-            $stats['available_balance'] = $totalEarnings - $withdrawnAmount - $pendingWithdrawal;
+            // Available balance = Total Earnings - Withdrawn - Pending Withdrawal
+            $availableBalance = $totalEarnings - $withdrawnAmount - $pendingWithdrawal;
 
-            // ✅ PENTING: Jangan load products dengan appended attributes
-            // Load merchant without causing issues
+            // Product stats
+            $stats = [
+                'total_products' => $merchant->products()->count(),
+                'active_products' => $merchant->products()->where('is_active', 1)->count(),
+                
+                // ✅ FINANCIAL STATS
+                'total_sales' => $totalSales,
+                'total_earnings' => $totalEarnings,
+                'pending_balance' => $pendingBalance,
+                'available_balance' => max(0, $availableBalance), // Prevent negative
+                'withdrawn_amount' => $withdrawnAmount,
+                'pending_withdrawal' => $pendingWithdrawal,
+            ];
+
+            // Merchant data without causing recursive loading
             $merchantData = [
                 'id' => $merchant->id,
                 'name' => $merchant->name,
@@ -116,6 +145,9 @@ class MerchantController extends Controller
                 'verified_at' => $merchant->verified_at,
                 'commission_rate' => $merchant->commission_rate,
                 'status' => $merchant->status,
+                'bank_name' => $merchant->bank_name,
+                'bank_account_number' => $merchant->bank_account_number,
+                'bank_account_name' => $merchant->bank_account_name,
             ];
 
             return response()->json([
@@ -196,10 +228,24 @@ class MerchantController extends Controller
 
         $merchant->update($data);
 
+        // Return updated data
+        $merchantData = [
+            'id' => $merchant->id,
+            'name' => $merchant->name,
+            'email' => $merchant->email,
+            'phone' => $merchant->phone,
+            'store_name' => $merchant->store_name,
+            'store_description' => $merchant->store_description,
+            'store_logo' => $merchant->store_logo,
+            'bank_name' => $merchant->bank_name,
+            'bank_account_number' => $merchant->bank_account_number,
+            'bank_account_name' => $merchant->bank_account_name,
+        ];
+
         return response()->json([
             'success' => true,
             'message' => 'Profile updated successfully',
-            'data' => $merchant
+            'data' => $merchantData
         ]);
     }
 
@@ -250,7 +296,6 @@ class MerchantController extends Controller
             ], 403);
         }
 
-        // ✅ Ubah validasi - SKU jadi nullable
         $validator = Validator::make($request->all(), [
             'category_id' => 'required|exists:categories,id',
             'name' => 'required|string|max:255',
@@ -258,7 +303,7 @@ class MerchantController extends Controller
             'price' => 'required|numeric|min:0',
             'stock' => 'required|integer|min:0',
             'unit' => 'required|string',
-            'sku' => 'nullable|string|unique:products,sku', // ← Changed to nullable
+            'sku' => 'nullable|string|unique:products,sku',
             'min_order' => 'required|integer|min:1',
             'images' => 'nullable|array',
             'images.*' => 'image|mimes:jpeg,png,jpg|max:2048'
@@ -276,12 +321,10 @@ class MerchantController extends Controller
         $data['merchant_id'] = $merchant->id;
         $data['is_active'] = $request->has('is_active') ? (bool) $request->is_active : true;
 
-        // ✅ Auto-generate SKU jika tidak ada
+        // Auto-generate SKU if not provided
         if (empty($data['sku'])) {
-            // Generate SKU: MER{merchant_id}-{timestamp}
             $data['sku'] = 'MER' . $merchant->id . '-' . strtoupper(substr(uniqid(), -6));
-
-            // Pastikan unique
+            
             while (Product::where('sku', $data['sku'])->exists()) {
                 $data['sku'] = 'MER' . $merchant->id . '-' . strtoupper(substr(uniqid(), -6));
             }
@@ -408,6 +451,49 @@ class MerchantController extends Controller
     }
 
     /**
+     * Get merchant balance
+     */
+    public function balance(Request $request)
+    {
+        $merchant = $request->user();
+
+        if (!$merchant->isMerchant()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ], 403);
+        }
+
+        // ✅ SAME ACCURATE CALCULATIONS
+        $totalEarnings = MerchantPayment::where('merchant_id', $merchant->id)
+            ->where('status', 'paid')
+            ->whereHas('order', function($q) {
+                $q->where('merchant_status', 'approved');
+            })
+            ->sum('merchant_amount') ?? 0;
+
+        $withdrawnAmount = MerchantWithdrawal::where('merchant_id', $merchant->id)
+            ->where('status', 'completed')
+            ->sum('amount') ?? 0;
+
+        $pendingWithdrawal = MerchantWithdrawal::where('merchant_id', $merchant->id)
+            ->whereIn('status', ['pending', 'processing'])
+            ->sum('amount') ?? 0;
+
+        $availableBalance = $totalEarnings - $withdrawnAmount - $pendingWithdrawal;
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'total_earnings' => $totalEarnings,
+                'withdrawn_amount' => $withdrawnAmount,
+                'pending_withdrawal' => $pendingWithdrawal,
+                'available_balance' => max(0, $availableBalance),
+            ]
+        ]);
+    }
+
+    /**
      * Request withdrawal
      */
     public function requestWithdrawal(Request $request)
@@ -422,7 +508,7 @@ class MerchantController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'amount' => 'required|numeric|min:50000', // Minimum 50k
+            'amount' => 'required|numeric|min:50000',
             'notes' => 'nullable|string'
         ]);
 
@@ -435,15 +521,18 @@ class MerchantController extends Controller
         }
 
         // Check available balance
-        $availableBalance = MerchantPayment::where('merchant_id', $merchant->id)
+        $totalEarnings = MerchantPayment::where('merchant_id', $merchant->id)
             ->where('status', 'paid')
-            ->sum('merchant_amount');
+            ->whereHas('order', function($q) {
+                $q->where('merchant_status', 'approved');
+            })
+            ->sum('merchant_amount') ?? 0;
 
         $withdrawnAmount = MerchantWithdrawal::where('merchant_id', $merchant->id)
             ->whereIn('status', ['pending', 'processing', 'completed'])
-            ->sum('amount');
+            ->sum('amount') ?? 0;
 
-        $currentBalance = $availableBalance - $withdrawnAmount;
+        $currentBalance = $totalEarnings - $withdrawnAmount;
 
         if ($request->amount > $currentBalance) {
             return response()->json([
@@ -490,45 +579,6 @@ class MerchantController extends Controller
         return response()->json([
             'success' => true,
             'data' => $withdrawals
-        ]);
-    }
-
-    /**
-     * Get merchant balance
-     */
-    public function balance(Request $request)
-    {
-        $merchant = $request->user();
-
-        if (!$merchant->isMerchant()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 403);
-        }
-
-        $totalEarnings = MerchantPayment::where('merchant_id', $merchant->id)
-            ->where('status', 'paid')
-            ->sum('merchant_amount');
-
-        $withdrawnAmount = MerchantWithdrawal::where('merchant_id', $merchant->id)
-            ->whereIn('status', ['completed'])
-            ->sum('amount');
-
-        $pendingWithdrawal = MerchantWithdrawal::where('merchant_id', $merchant->id)
-            ->whereIn('status', ['pending', 'processing'])
-            ->sum('amount');
-
-        $availableBalance = $totalEarnings - $withdrawnAmount - $pendingWithdrawal;
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'total_earnings' => $totalEarnings,
-                'withdrawn_amount' => $withdrawnAmount,
-                'pending_withdrawal' => $pendingWithdrawal,
-                'available_balance' => $availableBalance
-            ]
         ]);
     }
 }

@@ -137,16 +137,19 @@ class OrderController extends Controller
                 'payment_method' => $request->payment_method,
                 'notes' => $request->notes,
                 'status' => 'pending',
-                'payment_status' => 'unpaid'
+                'payment_status' => 'unpaid',
+                'merchant_status' => 'pending' // ✅ SET INITIAL STATUS
             ]);
 
             // Create order items, reduce stock, and create merchant payments
             $merchantPayments = [];
             
             foreach ($cartItems as $item) {
+                // ✅ STORE MERCHANT ID IN ORDER ITEM
                 OrderItem::create([
                     'order_id' => $order->id,
                     'product_id' => $item->product_id,
+                    'merchant_id' => $item->product->merchant_id, // ✅ ADD MERCHANT ID
                     'product_name' => $item->product->name,
                     'price' => $item->product->price,
                     'quantity' => $item->quantity,
@@ -187,7 +190,7 @@ class OrderController extends Controller
                     'order_amount' => $orderAmount,
                     'commission_amount' => $commissionAmount,
                     'merchant_amount' => $merchantAmount,
-                    'status' => 'pending'
+                    'status' => 'pending' // ✅ PENDING until merchant approves
                 ]);
             }
 
@@ -219,6 +222,229 @@ class OrderController extends Controller
                 'message' => $e->getMessage()
             ], 400);
         }
+    }
+
+    /**
+     * Update order status (when payment is completed)
+     */
+    public function updateStatus(Request $request, Order $order)
+    {
+        $order->update(['status' => $request->status]);
+
+        // ✅ ONLY UPDATE MERCHANT PAYMENT IF APPROVED
+        if ($request->status === 'paid' && $order->merchant_status === 'approved') {
+            MerchantPayment::where('order_id', $order->id)
+                ->update([
+                    'status' => 'paid',
+                    'paid_at' => now()
+                ]);
+        }
+
+        // Send notification based on status
+        $title = $this->getNotificationTitle($request->status);
+        $body = $this->getNotificationBody($order, $request->status);
+
+        $this->notificationService->sendToUser(
+            $order->user,
+            $title,
+            $body,
+            [
+                'type' => 'order_status',
+                'order_id' => $order->id,
+                'status' => $request->status,
+            ]
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Order status updated',
+        ]);
+    }
+
+    /**
+     * ✅ MERCHANT APPROVE ORDER
+     */
+    public function merchantApprove(Request $request, $id)
+    {
+        $merchant = $request->user();
+
+        if (!$merchant->isMerchant()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ], 403);
+        }
+
+        $order = Order::with(['items', 'user'])
+            ->whereHas('items', function($query) use ($merchant) {
+                $query->where('merchant_id', $merchant->id);
+            })
+            ->findOrFail($id);
+
+        if ($order->merchant_status !== 'pending') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order already processed'
+            ], 400);
+        }
+
+        DB::beginTransaction();
+        try {
+            // Update order merchant status
+            $order->update([
+                'merchant_status' => 'approved'
+            ]);
+
+            // ✅ IF PAYMENT IS ALREADY PAID, UPDATE MERCHANT PAYMENT
+            if ($order->payment_status === 'paid') {
+                MerchantPayment::where('order_id', $order->id)
+                    ->where('merchant_id', $merchant->id)
+                    ->update([
+                        'status' => 'paid',
+                        'paid_at' => now()
+                    ]);
+            }
+
+            DB::commit();
+
+            // Send notification to customer
+            $this->notificationService->sendToUser(
+                $order->user,
+                '✅ Order Approved',
+                "Your order #{$order->order_number} has been approved by merchant and is being prepared.",
+                [
+                    'type' => 'order_status',
+                    'order_id' => $order->id,
+                    'status' => 'approved',
+                ]
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Order approved successfully',
+                'data' => $order
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to approve order: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * ✅ MERCHANT REJECT ORDER
+     */
+    public function merchantReject(Request $request, $id)
+    {
+        $request->validate([
+            'reason' => 'required|string'
+        ]);
+
+        $merchant = $request->user();
+
+        if (!$merchant->isMerchant()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ], 403);
+        }
+
+        $order = Order::with(['items.product', 'user'])
+            ->whereHas('items', function($query) use ($merchant) {
+                $query->where('merchant_id', $merchant->id);
+            })
+            ->findOrFail($id);
+
+        if ($order->merchant_status !== 'pending') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order already processed'
+            ], 400);
+        }
+
+        DB::beginTransaction();
+        try {
+            // Update order status
+            $order->update([
+                'merchant_status' => 'rejected',
+                'status' => 'cancelled',
+                'cancel_reason' => $request->reason
+            ]);
+
+            // Restore product stock
+            foreach ($order->items as $item) {
+                if ($item->product) {
+                    $item->product->increment('stock', $item->quantity);
+                }
+            }
+
+            // Cancel merchant payments
+            MerchantPayment::where('order_id', $order->id)
+                ->where('merchant_id', $merchant->id)
+                ->update(['status' => 'failed']);
+
+            DB::commit();
+
+            // Send notification to customer
+            $this->notificationService->sendToUser(
+                $order->user,
+                '❌ Order Rejected',
+                "Your order #{$order->order_number} was rejected by merchant. Reason: {$request->reason}",
+                [
+                    'type' => 'order_status',
+                    'order_id' => $order->id,
+                    'status' => 'rejected',
+                ]
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Order rejected successfully',
+                'data' => $order
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to reject order: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * ✅ GET MERCHANT ORDERS
+     */
+    public function merchantOrders(Request $request)
+    {
+        $merchant = $request->user();
+
+        if (!$merchant->isMerchant()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ], 403);
+        }
+
+        $query = Order::with(['items.product', 'user', 'address'])
+            ->whereHas('items', function($q) use ($merchant) {
+                $q->where('merchant_id', $merchant->id);
+            });
+
+        // Filter by merchant_status
+        if ($request->has('status')) {
+            $query->where('merchant_status', $request->status);
+        }
+
+        $orders = $query->latest()->paginate(15);
+
+        return response()->json([
+            'success' => true,
+            'data' => $orders
+        ]);
     }
 
     /**
@@ -254,6 +480,7 @@ class OrderController extends Controller
 
             $order->update([
                 'status' => 'cancelled',
+                'merchant_status' => 'rejected',
                 'cancelled_at' => now(),
                 'cancel_reason' => $request->cancel_reason
             ]);
@@ -274,43 +501,6 @@ class OrderController extends Controller
                 'message' => 'Failed to cancel order'
             ], 500);
         }
-    }
-
-    /**
-     * Update order status (when payment is completed)
-     */
-    public function updateStatus(Request $request, Order $order)
-    {
-        $order->update(['status' => $request->status]);
-
-        // Update merchant payment status when order is paid
-        if ($request->status === 'paid') {
-            MerchantPayment::where('order_id', $order->id)
-                ->update([
-                    'status' => 'paid',
-                    'paid_at' => now()
-                ]);
-        }
-
-        // Send notification based on status
-        $title = $this->getNotificationTitle($request->status);
-        $body = $this->getNotificationBody($order, $request->status);
-
-        $this->notificationService->sendToUser(
-            $order->user,
-            $title,
-            $body,
-            [
-                'type' => 'order_status',
-                'order_id' => $order->id,
-                'status' => $request->status,
-            ]
-        );
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Order status updated',
-        ]);
     }
 
     private function getNotificationTitle($status)
