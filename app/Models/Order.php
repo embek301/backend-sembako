@@ -7,10 +7,21 @@ use Illuminate\Support\Str;
 class Order extends Model
 {
     protected $fillable = [
-        'order_number', 'user_id', 'address_id', 'subtotal', 
-        'shipping_cost', 'discount', 'total_price', 'status', 
-        'payment_status', 'payment_method', 'notes', 'paid_at',
-        'cancelled_at', 'cancel_reason'
+        'order_number',
+        'user_id',
+        'address_id',
+        'subtotal',
+        'shipping_cost',
+        'discount',
+        'total_price',
+        'status',
+        'payment_status',
+        'merchant_status', // ✅ ADD THIS
+        'payment_method',
+        'notes',
+        'paid_at',
+        'cancelled_at',
+        'cancel_reason'
     ];
 
     protected $casts = [
@@ -54,5 +65,18 @@ class Order extends Model
     public function tracking()
     {
         return $this->hasOne(DeliveryTracking::class);
+    }
+
+    /**
+     * ✅ Get all merchants from this order
+     */
+    public function merchants()
+    {
+        return $this->belongsToMany(
+            User::class,
+            'order_items',
+            'order_id',
+            'merchant_id'
+        )->distinct();
     }
 }
